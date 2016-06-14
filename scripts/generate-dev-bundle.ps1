@@ -2,8 +2,9 @@
 # use 32bit by default
 $PLATFORM = "windows_x86"
 $MONGO_VERSION = "2.6.7"
-$NODE_VERSION = "0.10.40"
-$NPM_VERSION = "1.4.9"
+$NODE_VERSION = "0.10.45"
+$NPM_VERSION = "2.15.1"
+$PYTHON_VERSION = "2.7.10" # For node-gyp
 
 # take it form the environment if exists
 if (Test-Path env:PLATFORM) {
@@ -26,6 +27,8 @@ cmd /c rmdir "$DIR" /s /q
 mkdir "$DIR"
 cd "$DIR"
 
+mkdir lib
+mkdir lib\node_modules
 mkdir bin
 cd bin
 
@@ -37,9 +40,21 @@ $shell = New-Object -com shell.application
 $node_link = "http://nodejs.org/dist/v${NODE_VERSION}/node.exe"
 $webclient.DownloadFile($node_link, "$DIR\bin\node.exe")
 
+# On Windows we provide a reliable version of python.exe for use by
+# node-gyp (the tool that rebuilds binary node modules). #WinPy
+$py_msi_link = "http://www.python.org/ftp/python/${PYTHON_VERSION}/python-${PYTHON_VERSION}.msi"
+$py_msi = "${DIR}\python.msi"
+$webclient.DownloadFile($py_msi_link, $py_msi)
+$py_dir = "${DIR}\python"
+msiexec /i "$py_msi" TARGETDIR="$py_dir" /quiet /qn /norestart
+$env:PATH = "${py_dir};${env:PATH}"
+
 # download initial version of npm
 $npm_zip = "$DIR\bin\npm.zip"
-$npm_link = "https://nodejs.org/dist/npm/npm-${NPM_VERSION}.zip"
+
+# These dist/npm archives were only published for 1.x versions of npm, and
+# this is the most recent one.
+$npm_link = "https://nodejs.org/dist/npm/npm-1.4.12.zip"
 $webclient.DownloadFile($npm_link, $npm_zip)
 
 $zip = $shell.NameSpace($npm_zip)
@@ -51,6 +66,16 @@ rm -Recurse -Force $npm_zip
 
 # add bin to the front of the path so we can use our own node for building
 $env:PATH = "${DIR}\bin;${env:PATH}"
+
+# Install the version of npm that we're actually going to expose from the
+# dev bundle. Note that we use npm@1.4.12 to install npm@${NPM_VERSION},
+# but we use npm@3.1.2 to install dev_bundle\lib\node_modules, so that the
+# dev bundle packages have a flatter structure. Three different versions!
+cd "${DIR}\lib"
+npm install npm@${NPM_VERSION}
+rm -Recurse -Force "${DIR}\bin\node_modules"
+copy "${CHECKOUT_DIR}\scripts\npm.cmd" "${DIR}\bin\npm.cmd"
+npm version
 
 mkdir "${DIR}\bin\npm3"
 cd "${DIR}\bin\npm3"
@@ -121,6 +146,9 @@ rm -Recurse -Force "$DIR\mongodb\$mongo_name"
 
 # Remove npm 3 before we package the dev bundle
 rm -Recurse -Force "${DIR}\bin\npm3"
+
+rm -Recurse -Force "$py_msi"
+python --version
 
 cd $DIR
 

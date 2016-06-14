@@ -1,5 +1,8 @@
 # Meteor
 
+[![TravisCI Status](https://travis-ci.org/meteor/meteor.svg?branch=devel)](https://travis-ci.org/meteor/meteor)
+[![CircleCI Status](https://circleci.com/gh/meteor/meteor/tree/devel.svg?style=shield&circle-token=c2d3c041506bd493ef3795ffa4448684cfce97b8)](https://circleci.com/gh/meteor/meteor/tree/devel)
+
 Meteor is an ultra-simple environment for building modern web
 applications.
 
@@ -9,9 +12,9 @@ With Meteor you write apps:
 * that send data over the wire, rather than HTML
 * using your choice of popular open-source libraries
 
-Documentation is available at http://docs.meteor.com/.
-
 Try the getting started [tutorial](https://www.meteor.com/try).
+
+Next, read the [guide](http://guide.meteor.com) or the reference documentation at http://docs.meteor.com/.
 
 ## Quick Start
 
@@ -32,12 +35,6 @@ Run it:
 ```bash
 cd try-meteor
 meteor
-```
-
-Deploy it to the world, for free:
-
-```bash
-meteor deploy try-meteor.meteor.com
 ```
 
 ## Slow Start (for developers)
@@ -99,7 +96,7 @@ sudo rm /usr/local/bin/meteor
 Building an application with Meteor?
 
 * Announcement list: sign up at http://www.meteor.com/
-* Ask a question: http://stackoverflow.com/questions/tagged/meteor
+* Having problems? Ask for help at: http://stackoverflow.com/questions/tagged/meteor
 * Discussion forums: https://forums.meteor.com/
 
 Interested in contributing to Meteor?

@@ -1,8 +1,13 @@
-var newConnection = function (stream) {
+import lolex from 'lolex';
+
+var newConnection = function (stream, options) {
   // Some of these tests leave outstanding methods with no result yet
   // returned. This should not block us from re-running tests when sources
   // change.
-  return new LivedataTest.Connection(stream, {reloadWithOutstanding: true});
+  return new LivedataTest.Connection(stream, _.extend({
+    reloadWithOutstanding: true,
+    bufferedWritesInterval: 0
+  }, options));
 };
 
 var makeConnectMessage = function (session) {
@@ -15,7 +20,7 @@ var makeConnectMessage = function (session) {
   if (session)
     msg.session = session;
   return msg;
-}
+};
 
 // Tests that stream got a message that matches expected.
 // Expected is normally an object, and allows a wildcard value of '*',
@@ -90,6 +95,70 @@ Tinytest.add("livedata stub - receive data", function (test) {
                   fields: {a:2}});
   test.equal(coll.find({}).fetch(), [{_id:'1234', a:2}]);
   test.isUndefined(conn._updatesForUnknownStores[coll_name]);
+});
+
+Tinytest.add("livedata stub - buffering data", function (test) {
+  // Install special setTimeout that allows tick-by-tick control in tests using sinonjs 'lolex'
+  // This needs to be before the connection is instantiated.
+  const clock = lolex.install();
+  const tick = (timeout) => clock.tick(timeout);
+
+  const stream = new StubStream();
+  const conn = newConnection(stream, {
+    bufferedWritesInterval: 10,
+    bufferedWritesMaxAge: 40,
+  });
+
+  startAndConnect(test, stream);
+
+  const coll_name = Random.id();
+  const coll = new Mongo.Collection(coll_name, conn);
+
+  const testDocCount = (count) => test.equal(coll.find({}).count(), count);
+
+  const addDoc = () => {
+    stream.receive({
+      msg: 'added',
+      collection: coll_name,
+      id: Random.id(),
+      fields: {}
+    });
+  };
+
+  // Starting at 0 ticks.  At this point we haven't advanced the fake clock at all.
+
+  addDoc(); // 1st Doc
+  testDocCount(0);  // No doc been recognized yet because it's buffered, waiting for more.
+  tick(6); // 6 total ticks
+  testDocCount(0); // Ensure that the doc still hasn't shown up, despite the clock moving forward.
+  tick(4) // 10 total ticks, 1st buffer interval
+  testDocCount(1); // No other docs have arrived, so we 'see' the 1st doc.
+
+  addDoc(); // 2nd doc
+  tick(1); // 11 total ticks (1 since last flush)
+  testDocCount(1); // Again, second doc hasn't arrived because we're waiting for more...
+  tick(9); // 20 total ticks (10 ticks since last flush & the 2nd 10-tick interval)
+  testDocCount(2); // Now we're here and got the second document.
+
+  // Add several docs, frequently enough that we buffer multiple times before the next flush.
+  addDoc(); // 3 docs
+  tick(6); // 26 ticks (6 since last flush)
+  addDoc(); // 4 docs
+  tick(6); // 32 ticks (12 since last flush)
+  addDoc(); // 5 docs
+  tick(6); // 38 ticks (18 since last flush)
+  addDoc(); // 6 docs
+  tick(6); // 44 ticks (24 since last flush)
+  addDoc(); // 7 docs
+  tick(9); // 53 ticks (33 since last flush)
+  addDoc(); // 8 docs
+  tick(9); // 62 ticks! (42 ticks since last flush, over max-age - next interval triggers flush)
+  testDocCount(2); // Still at 2 from before! (Just making sure)
+  tick(1); // Ok, 63 ticks (10 since last doc, so this should cause the flush of all the docs)
+  testDocCount(8); // See all the docs.
+
+  // Put things back how they were.
+  clock.uninstall();
 });
 
 Tinytest.add("livedata stub - subscribe", function (test) {
@@ -742,6 +811,47 @@ Tinytest.add("livedata stub - reconnect", function (test) {
   o.stop();
 });
 
+if (Meteor.isClient) {
+  Tinytest.add("livedata stub - reconnect non-idempotent method", function(test) {
+    // This test is for https://github.com/meteor/meteor/issues/6108
+    var stream = new StubStream();
+    var conn = newConnection(stream);
+
+    startAndConnect(test, stream);
+
+    var methodCallbackFired = false;
+    var methodCallbackErrored = false;
+    // call with noRetry true so that the method should fail to retry on reconnect.
+    conn.apply('do_something', [], {noRetry: true}, function(error) {
+      methodCallbackFired = true;
+      // failure on reconnect should trigger an error.
+      if (error && error.error === 'invocation-failed') {
+        methodCallbackErrored = true;
+      }
+    });
+
+    //The method has not succeeded yet
+    test.isFalse(methodCallbackFired);
+    // reconnect.
+    stream.sent.shift();
+    // "receive the message"
+    stream.reset();
+
+    // verify that a reconnect message was sent.
+    testGotMessage(test, stream, makeConnectMessage(SESSION_ID));
+
+    // Make sure that the stream triggers connection.
+    stream.receive({msg: 'connected', session: SESSION_ID + 1});
+
+    //The method callback should fire even though the stream has not sent a response.
+    //the callback should have been fired with an error.
+    test.isTrue(methodCallbackFired);
+    test.isTrue(methodCallbackErrored);
+
+    // verify that the method message was not sent.
+    test.isUndefined(stream.sent.shift());
+  });
+}
 
 if (Meteor.isClient) {
   Tinytest.add("livedata stub - reconnect method which only got result", function (test) {

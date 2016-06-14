@@ -255,15 +255,13 @@ var operatorBranchedMatcher = function (valueSelector, matcher, isRoot) {
 
   var operatorMatchers = [];
   _.each(valueSelector, function (operand, operator) {
-    // XXX we should actually implement $eq, which is new in 2.6
     var simpleRange = _.contains(['$lt', '$lte', '$gt', '$gte'], operator) &&
       _.isNumber(operand);
-    var simpleInequality = operator === '$ne' && !_.isObject(operand);
+    var simpleEquality = _.contains(['$ne', '$eq'], operator) && !_.isObject(operand);
     var simpleInclusion = _.contains(['$in', '$nin'], operator) &&
       _.isArray(operand) && !_.any(operand, _.isObject);
 
-    if (! (operator === '$eq' || simpleRange ||
-           simpleInclusion || simpleInequality)) {
+    if (! (simpleRange || simpleInclusion || simpleEquality)) {
       matcher._isSimple = false;
     }
 
@@ -380,6 +378,10 @@ var invertBranchedMatcher = function (branchedMatcher) {
 // "match each branched value independently and combine with
 // convertElementMatcherToBranchedMatcher".
 var VALUE_OPERATORS = {
+  $eq: function (operand) {
+    return convertElementMatcherToBranchedMatcher(
+      equalityElementMatcher(operand));
+  },
   $not: function (operand, valueSelector, matcher) {
     return invertBranchedMatcher(compileValueSelector(operand, matcher));
   },
@@ -681,7 +683,7 @@ ELEMENT_OPERATORS = {
         throw Error("$elemMatch need an object");
 
       var subMatcher, isDocMatcher;
-      if (isOperatorObject(operand, true)) {
+      if (isOperatorObject(_.omit(operand, _.keys(LOGICAL_OPERATORS)), true)) {
         subMatcher = compileValueSelector(operand, matcher);
         isDocMatcher = false;
       } else {

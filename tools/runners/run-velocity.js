@@ -1,9 +1,18 @@
 var Console = require('../console/console.js').Console;
 var isopackets = require('../tool-env/isopackets.js');
-
-var phantomjs = require('phantomjs');
 var child_process = require('child_process');
 var _ = require('underscore');
+
+try {
+  var phantomjs = require('phantomjs-prebuilt');
+} catch (e) {
+  throw new Error([
+    "Please install PhantomJS by running the following command:",
+    "",
+    "  meteor npm install -g phantomjs-prebuilt",
+    ""
+  ].join("\n"));
+}
 
 // XXX this could really use a self-test!
 
@@ -117,8 +126,8 @@ var runVelocity = function (url) {
       function visitWithPhantom (url) {
         var phantomScript = "require('webpage').create().open('" + url + "');";
         var browserProcess = child_process.execFile(
-          '/bin/bash',
-          ['-c',
+          '/usr/bin/env',
+          ['bash', '-c',
            ("exec " + phantomjs.path + " /dev/stdin <<'END'\n" +
             phantomScript + "END\n")]);
         browserProcesses.push(browserProcess);

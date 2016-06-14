@@ -25,8 +25,8 @@ var makePool = function (mailUrlString) {
   var auth = false;
   if (mailUrl.auth) {
     var parts = mailUrl.auth.split(':', 2);
-    auth = {user: parts[0] && decodeURIComponent(parts[0]),
-            pass: parts[1] && decodeURIComponent(parts[1])};
+    auth = {user: parts[0],
+            pass: parts[1]};
   }
 
   var simplesmtp = Npm.require('simplesmtp');
@@ -41,14 +41,17 @@ var makePool = function (mailUrlString) {
   return pool;
 };
 
-var getPool = _.once(function () {
+var getPool = function() {
   // We delay this check until the first call to Email.send, in case someone
-  // set process.env.MAIL_URL in startup code.
+  // set process.env.MAIL_URL in startup code. Then we store in a cache until
+  // process.env.MAIL_URL changes.
   var url = process.env.MAIL_URL;
-  if (! url)
-    return null;
-  return makePool(url);
-});
+  if (this.cacheKey === undefined || this.cacheKey !== url) {
+    this.cacheKey = url;
+    this.cache = url ? makePool(url) : null;
+  }
+  return this.cache;
+}
 
 var next_devmode_mail_id = 0;
 var output_stream = process.stdout;
@@ -174,6 +177,10 @@ Email.send = function (options) {
     _.each(options.headers, function (value, name) {
       mc.addHeader(name, value);
     });
+
+    if (!options.headers || !options.headers.hasOwnProperty('Date')) {
+      mc.addHeader('Date', new Date().toUTCString().replace(/GMT/, '+0000'));
+    }
 
     _.each(options.attachments, function(attachment){
       mc.addAttachment(attachment);

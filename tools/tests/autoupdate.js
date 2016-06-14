@@ -31,7 +31,7 @@ var recommend = function (sandbox, version) {
   });
 };
 
-selftest.define("autoupdate", ['checkout'], function () {
+selftest.define("autoupdate", ['checkout', 'custom-warehouse'], function () {
   var s = new Sandbox({
     warehouse: {
       v1: { recommended: true},
@@ -59,6 +59,7 @@ selftest.define("autoupdate", ['checkout'], function () {
     run.waitSecs(30);
     run.match("New hotness v2 being downloaded");
     run.match("running at");
+    require('../utils/utils.js').sleepMs(500);
     run.stop();
 
     // We won't see the banner a second time, or any other message about

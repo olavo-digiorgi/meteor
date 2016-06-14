@@ -56,8 +56,6 @@
 /// In addition to printing functions, the Console class provides progress bar
 /// support, that is mostly handled through buildmessage.js.
 var _ = require('underscore');
-var Fiber = require('fibers');
-var Future = require('fibers/future');
 var readline = require('readline');
 var util = require('util');
 var buildmessage = require('../utils/buildmessage.js');
@@ -70,7 +68,7 @@ var wordwrap = require('wordwrap');
 var PROGRESS_DEBUG = !!process.env.METEOR_PROGRESS_DEBUG;
 var FORCE_PRETTY=undefined;
 var CARRIAGE_RETURN =
-  (process.platform === 'win32' ? new Array(249).join('\b') : '\r');
+  (process.platform === 'win32' && process.stdout.isTTY ? new Array(249).join('\b') : '\r');
 
 if (process.env.METEOR_PRETTY_OUTPUT) {
   FORCE_PRETTY = process.env.METEOR_PRETTY_OUTPUT != '0';
@@ -311,11 +309,16 @@ var ProgressDisplayFull = function (console) {
   self._progressBarRenderer = new ProgressBarRenderer(PROGRESS_BAR_FORMAT, options);
   self._progressBarRenderer.start = new Date();
 
+  self._headless = false;
+
   self._spinnerRenderer = new SpinnerRenderer();
 
   self._fraction = undefined;
 
   self._printedLength = 0;
+
+  self._lastWrittenLine = null;
+  self._lastWrittenTime = 0;
 };
 
 _.extend(ProgressDisplayFull.prototype, {
@@ -354,10 +357,12 @@ _.extend(ProgressDisplayFull.prototype, {
     self._render();
   },
 
+  setHeadless(headless) {
+    this._headless = !! headless;
+  },
+
   _render: function () {
     var self = this;
-
-    var text = self._status;
 
     // XXX: Throttle these updates?
     // XXX: Or maybe just jump to the correct position?
@@ -381,14 +386,18 @@ _.extend(ProgressDisplayFull.prototype, {
     if (self._fraction !== undefined && progressColumns > 16) {
       // 16 is a heuristic number that allows enough space for a meaningful progress bar
       progressGraphic = "  " + self._progressBarRenderer.asString(progressColumns - 2);
-    } else if (progressColumns > 3) {
+
+    } else if (! self._headless && progressColumns > 3) {
       // 3 = 2 spaces + 1 spinner character
       progressGraphic = "  " + self._spinnerRenderer.asString();
-    } else {
-      // Don't show any progress graphic - no room!
+
+    } else if (new Date - self._lastWrittenTime > 5 * 60 * 1000) {
+      // Print something every five minutes, to avoid test timeouts.
+      progressGraphic = "  [ProgressDisplayFull keepalive]";
+      self._lastWrittenLine = null; // Force printing.
     }
 
-    if (text || progressGraphic) {
+    if (self._status || progressGraphic) {
       // XXX: Just update the graphic, to avoid text flicker?
 
       var line = spacesString(indentColumns);
@@ -406,8 +415,17 @@ _.extend(ProgressDisplayFull.prototype, {
       line += progressGraphic + CARRIAGE_RETURN;
       length += progressGraphic.length;
 
+      if (self._headless &&
+          line === self._lastWrittenLine) {
+        // Don't write the exact same line twice in a row.
+        return;
+      }
+
       self.depaint();
+
       self._stream.write(line);
+      self._lastWrittenLine = line;
+      self._lastWrittenTime = +new Date;
       self._printedLength = length;
     }
   }
@@ -421,7 +439,7 @@ var StatusPoller = function (console) {
 
   self._console = console;
 
-  self._pollFiber = null;
+  self._pollPromise = null;
   self._throttledStatusPoll = new utils.Throttled({
     interval: STATUS_INTERVAL_MS
   });
@@ -433,18 +451,17 @@ _.extend(StatusPoller.prototype, {
   _startPoller: function () {
     var self = this;
 
-    if (self._pollFiber) {
+    if (self._pollPromise) {
       throw new Error("Already started");
     }
 
-    self._pollFiber = Fiber(function () {
+    self._pollPromise = (async() => {
+      utils.sleepMs(STATUS_INTERVAL_MS);
       while (! self._stop) {
-        utils.sleepMs(STATUS_INTERVAL_MS);
-
         self.statusPoll();
+        utils.sleepMs(STATUS_INTERVAL_MS);
       }
-    });
-    self._pollFiber.run();
+    })();
   },
 
   stop: function () {
@@ -584,11 +601,13 @@ _.extend(Console.prototype, {
   setPretty: function (pretty) {
     var self = this;
     // If we're being forced, do nothing.
-    if (FORCE_PRETTY !== undefined)
+    if (FORCE_PRETTY !== undefined) {
       return;
+    }
     // If no change, do nothing.
-    if (self._pretty === pretty)
+    if (self._pretty === pretty) {
       return;
+    }
     self._pretty = pretty;
     self._updateProgressDisplay();
   },
@@ -604,8 +623,9 @@ _.extend(Console.prototype, {
     self._pretty = self._progressDisplayEnabled = true;
 
     // Update the screen if anything changed.
-    if (! originalPretty || ! originalProgressDisplayEnabled)
+    if (! originalPretty || ! originalProgressDisplayEnabled) {
       self._updateProgressDisplay();
+    }
 
     try {
       return f();
@@ -614,8 +634,9 @@ _.extend(Console.prototype, {
       self._pretty = originalPretty;
       self._progressDisplayEnabled = originalProgressDisplayEnabled;
       // Update the screen if anything changed.
-      if (! originalPretty || ! originalProgressDisplayEnabled)
+      if (! originalPretty || ! originalProgressDisplayEnabled) {
         self._updateProgressDisplay();
+      }
     }
   },
 
@@ -640,8 +661,9 @@ _.extend(Console.prototype, {
     // relies on the previous chars to be erasable with '\b' (end-line chars
     // can't be erased this way). This is why we report a smaller number than it
     // is in reality, for safety.
-    if (process.platform === 'win32')
+    if (process.platform === 'win32') {
       width -= 5;
+    }
 
     return width;
   },
@@ -900,11 +922,18 @@ _.extend(Console.prototype, {
   // with the CHECKMARK as the bullet point in front of it.
   success: function (message) {
     var self = this;
+    var checkmark;
 
     if (! self._pretty) {
       return self.info(message);
     }
-    var checkmark = chalk.green('\u2713'); // CHECKMARK
+
+    if (process.platform === "win32") {
+      checkmark = chalk.green('SUCCESS');
+    } else {
+      checkmark = chalk.green('\u2713'); // CHECKMARK
+    }
+
     return self.info(
         chalk.green(message),
         self.options({ bulletPoint: checkmark  + " "}));
@@ -1080,8 +1109,9 @@ _.extend(Console.prototype, {
     var longest = '';
     _.each(rows, function (row) {
       var col0 = row[0] || '';
-      if (col0.length > longest.length)
+      if (col0.length > longest.length) {
         longest = col0;
+      }
     });
 
     var pad = longest.replace(/./g, ' ');
@@ -1149,8 +1179,9 @@ _.extend(Console.prototype, {
         wrappedText = text;
       }
       wrappedText = _.map(wrappedText.split('\n'), function (s) {
-        if (s === "")
+        if (s === "") {
           return "";
+        }
         return indent + s;
       }).join('\n');
 
@@ -1186,8 +1217,9 @@ _.extend(Console.prototype, {
       enabled = true;
     }
 
-    if (self._progressDisplayEnabled === enabled)
+    if (self._progressDisplayEnabled === enabled) {
       return;
+    }
 
     self._progressDisplayEnabled = enabled;
     self._updateProgressDisplay();
@@ -1233,6 +1265,15 @@ _.extend(Console.prototype, {
     self._setProgressDisplay(newProgressDisplay);
   },
 
+  setHeadless(headless) {
+    if (typeof headless === "undefined") headless = true;
+    headless = !! headless;
+    if (this._progressDisplay &&
+        this._progressDisplay.setHeadless) {
+      this._progressDisplay.setHeadless(headless);
+    }
+  },
+
   _setProgressDisplay: function (newProgressDisplay) {
     var self = this;
 
@@ -1251,8 +1292,6 @@ _.extend(Console.prototype, {
 //   - stream: defaults to process.stdout (you might want process.stderr)
 Console.prototype.readLine = function (options) {
   var self = this;
-
-  var fut = new Future();
 
   options = _.extend({
     echo: true,
@@ -1290,15 +1329,16 @@ Console.prototype.readLine = function (options) {
     rl.prompt();
   }
 
-  rl.on('line', function (line) {
-    rl.close();
-    if (! options.echo)
-      options.stream.write("\n");
-    self._setProgressDisplay(previousProgressDisplay);
-    fut['return'](line);
-  });
-
-  return fut.wait();
+  return new Promise(function (resolve) {
+    rl.on('line', function (line) {
+      rl.close();
+      if (! options.echo) {
+        options.stream.write("\n");
+      }
+      self._setProgressDisplay(previousProgressDisplay);
+      resolve(line);
+    });
+  }).await();
 };
 
 
